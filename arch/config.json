@@ -1,0 +1,13 @@
+{
+  "blueprint": {
+    "customizations": {
+      "filesystem": [
+        {
+          "mountpoint": "/",
+          "minsize": "10 GiB"
+        }
+      ]
+    }
+  },
+  "filesystem": "btrfs"
+}
