@@ -14,17 +14,48 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
 
 FROM base AS system
 
+# 1. Copy compiled artifacts (including bootc dracut module) from builder
 COPY --from=builder /output /
 
 # Move everything from `/var` to `/usr/lib/sysimage` so behavior around pacman remains the same on `bootc usroverlay`'d systems
 RUN grep "= */var" /etc/pacman.conf | sed "/= *\/var/s/.*=// ; s/ //" | xargs -n1 sh -c 'mkdir -p "/usr/lib/sysimage/$(dirname $(echo $1 | sed "s@/var/@@"))" && mv -v "$1" "/usr/lib/sysimage/$(echo "$1" | sed "s@/var/@@")"' '' && \
     sed -i -e "/= *\/var/ s/^#//" -e "s@= */var@= /usr/lib/sysimage@g" -e "/DownloadUser/d" /etc/pacman.conf
 
-RUN pacman -Syu --noconfirm
+# 2. Consolidated system package & desktop environment installation
+RUN pacman -Syu --noconfirm \
+    base \
+    bubblewrap \
+    dracut \
+    linux \
+    linux-firmware \
+    ostree \
+    btrfs-progs \
+    e2fsprogs \
+    xfsprogs \
+    dosfstools \
+    skopeo \
+    dbus \
+    dbus-glib \
+    glib2 \
+    shadow \
+    openssh \
+    sudo \
+    plasma-desktop \
+    plasma-workspace \
+    sddm \
+    qt6-declarative \
+    wayland \
+    xorg-xwayland \
+    mesa \
+    pipewire \
+    pipewire-alsa \
+    wireplumber \
+    konsole \
+    dolphin \
+    && pacman -S --clean --noconfirm
 
-RUN pacman -Sy --noconfirm base bubblewrap dracut linux linux-firmware ostree btrfs-progs e2fsprogs xfsprogs dosfstools skopeo dbus dbus-glib glib2 ostree shadow openssh && pacman -S --clean --noconfirm
-
-RUN systemctl enable systemd-networkd systemd-resolved systemd-timesyncd sshd && \
+RUN systemctl enable systemd-networkd systemd-resolved systemd-timesyncd sshd sddm && \
+    systemctl set-default graphical.target && \
     systemctl mask systemd-firstboot.service
 
 # Pre-configure basic system settings so the image is ready to boot without
@@ -35,19 +66,17 @@ RUN echo "uninitialized" > /etc/machine-id && \
     ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 
 # Bring up any wired ethernet interface via DHCP.
-# systemd-networkd requires a .network file to manage an interface; without
-# one it silently ignores all NICs (including the QEMU virtio NIC).
-# Match by Type=ether rather than by name to catch all naming conventions
-# (ens3, enp0s3, eth0, etc.) — same approach used in composefs-rs examples.
 RUN printf '[Match]\nType=ether\n\n[Network]\nDHCP=yes\n' \
     > /usr/lib/systemd/network/20-wired.network
 
-# Point resolv.conf at systemd-resolved's stub via tmpfiles.d so it's
-# created correctly at first boot (can't symlink during build; resolv.conf
-# is bind-mounted by the container runtime and is EBUSY).
+# Point resolv.conf at systemd-resolved's stub via tmpfiles.d
 RUN printf 'L! /etc/resolv.conf - - - - /run/systemd/resolve/stub-resolv.conf\n' \
     > /usr/lib/tmpfiles.d/resolv-conf.conf
 
+# Ensure SDDM home directory is populated for stateful operations
+RUN mkdir -p /var/lib/sddm && chown -R 177:177 /var/lib/sddm || true
+
+# Run initramfs script (dracut now finds /usr/lib/dracut/modules.d/*bootc*)
 RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/shared/initramfs.sh
@@ -55,6 +84,19 @@ RUN --mount=type=tmpfs,dst=/tmp --mount=type=tmpfs,dst=/root \
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     sed -i 's|^HOME=.*|HOME=/var/home|' "/etc/default/useradd" && \
     /ctx/shared/bootc-rootfs.sh
+
+# Create user account and add it to the admin (wheel) group
+RUN useradd -m -d /var/home/gabriel -G wheel -s /bin/bash gabriel
+
+ARG ROOT_PASSWORD=archlinux
+ARG GABRIEL_PASSWORD=archlinux
+
+# Set passwords for root and your new user
+RUN echo "root:${ROOT_PASSWORD}" | chpasswd && \
+    echo "gabriel:${GABRIEL_PASSWORD}" | chpasswd
+
+# Allow members of the wheel group to use sudo
+RUN echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 
 LABEL containers.bootc 1
 

@@ -1,5 +1,7 @@
 mod bcvk 'bcvk.just'
 
+set dotenv-load
+
 image_name := env("BUILD_IMAGE_NAME", "")
 image_tag := env("BUILD_IMAGE_TAG", "latest")
 base_dir := env("BUILD_BASE_DIR", ".")
@@ -10,12 +12,18 @@ options := if selinux == "true" { "-v /var/lib/containers:/var/lib/containers:Z 
 container_runtime := env("CONTAINER_RUNTIME", `command -v podman >/dev/null 2>&1 && echo podman || echo docker`)
 sudo_prefix := if env("NOSUDO", "") == "" { "sudo " } else { "" }
 
+root_password := env("ROOT_PASSWORD", "archlinux")
+gabriel_password := env("GABRIEL_PASSWORD", "archlinux")
+
 # Build image and run an ephemeral VM for boot testing
 test IMAGE=image_name:
     just bcvk build-and-test {{IMAGE}}
 
 build $image_name=image_name:
-    {{sudo_prefix}}{{container_runtime}} build -f {{image_name}}/Containerfile -t "${image_name}-bootc:latest" .
+    {{sudo_prefix}}{{container_runtime}} build \
+        --build-arg ROOT_PASSWORD="{{root_password}}" \
+        --build-arg GABRIEL_PASSWORD="{{gabriel_password}}" \
+        -f {{image_name}}/Containerfile -t "${image_name}-bootc:latest" .
 
 bootc $image_name=image_name $image_tag=image_tag *ARGS:
     sudo {{container_runtime}} run \
